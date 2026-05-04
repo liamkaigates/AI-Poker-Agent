@@ -23,7 +23,7 @@ class CustomPlayer(BasePokerPlayer):
     hole_cards = gen_cards(hole_card) # Generate Card objects for hole cards
     community_cards = gen_cards(round_state["community_card"]) # Generate Card objects for community cards
     street = round_state["street"] # Obtain round type (preflop, flop, turn, river, showdown)
-    win_rate = estimate_hole_card_win_rate(250, 2, hole_cards, community_cards) # Compute win rate using Monte Carlo simulations
+    win_rate = estimate_hole_card_win_rate(200, 2, hole_cards, community_cards) # Compute win rate using Monte Carlo simulations
     pot_amount = round_state["pot"]["main"]["amount"] # Obtain pot amount
     action_histories = round_state["action_histories"].get(street, []) # Obtain action history of current round
     fold_probability = 0.2 # Assume the opponent folds with probaility of 0.2
