@@ -9,7 +9,7 @@ from argparse import ArgumentParser
 
 """ =========== *Remember to import your agent!!! =========== """
 from randomplayer import RandomPlayer
-# from smartwarrior import SmartWarrior
+from submission.custom_player import CustomPlayer
 """ ========================================================= """
 
 """ Example---To run testperf.py with random warrior AI against itself. 
