@@ -4,48 +4,246 @@ from pypokerengine.utils.card_utils import gen_cards, estimate_hole_card_win_rat
 from time import sleep
 import pprint
 
+MAX_DEPTH = 3 # Max depth for expectiminimax tree search
+ACTION_LIKELIHOODS = { # We define 5 levels of hand strength and the likelihood of each action given the respective hand strength
+  "fold": [0.60, 0.35, 0.20, 0.08, 0.03],
+  "call": [0.30, 0.45, 0.50, 0.37, 0.27],
+  "raise": [0.10, 0.20, 0.30, 0.55, 0.70],
+}
+
+
+class OpponentModel:
+  def __init__(self):
+    self.beliefs = [0.2] * 5
+    self.raise_count = 0
+    self.call_count = 0
+    self.fold_count = 0
+    self.total = 0
+
+  def observe(self, action):
+    action = action.lower()
+    if action not in ACTION_LIKELIHOODS:
+      return
+
+    if action == "raise":
+      self.raise_count += 1
+    elif action == "call":
+      self.call_count += 1
+    elif action == "fold":
+      self.fold_count += 1
+    self.total += 1
+
+    likelihoods = ACTION_LIKELIHOODS[action]
+    new_beliefs = [belief * likelihood for belief, likelihood in zip(self.beliefs, likelihoods)]
+    normalizer = sum(new_beliefs)
+    if normalizer > 0:
+      self.beliefs = [belief / normalizer for belief in new_beliefs]
+
+  def fold_probability(self):
+    if self.total == 0:
+      return 0.30
+    passive_rate = (self.fold_count + (0.4 * self.call_count)) / self.total
+    weight = min(self.total / 25.0, 1.0)
+    return (weight * passive_rate) + ((1.0 - weight) * 0.30)
+
+  def call_probability(self):
+    if self.total == 0:
+      return 0.40
+    rate = self.call_count / self.total
+    weight = min(self.total / 25.0, 1.0)
+    return (weight * rate) + ((1.0 - weight) * 0.40)
+
+  def aggression_factor(self):
+    if self.total == 0:
+      return 0.5
+    return (self.raise_count + (0.25 * self.call_count)) / self.total
+
+  def estimated_equity(self):
+    expected_strength = sum(index * probability for index, probability in enumerate(self.beliefs))
+    return expected_strength / 4.0
+
+
 class CustomPlayer(BasePokerPlayer):
 
-  def __init__(self):
-    super(CustomPlayer, self).__init__()
-    self.opponent_stats = {}
-
   def declare_action(self, valid_actions, hole_card, round_state):
-    actions = [action["action"] for action in valid_actions] # Set actions to a list of valid actions
-    best_action = "fold" # Set minimum action to fold
-    best_value = float("-inf") # Set minimum action value to negative infity
+    actions = [action["action"] for action in valid_actions]
+    context = self.build_context(hole_card, round_state)
+    best_action = "fold"
+    best_value = float("-inf")
 
     for action in actions:
-      value = self.expectiminimax(action, hole_card, round_state) # Compute expectiminimax value
-
-      if value > best_value: # Update best action/value if current action has a higher value
+      value = self.expectiminimax(action, context, MAX_DEPTH)
+      if value > best_value:
         best_action = action
         best_value = value
 
     return best_action
 
-  def expectiminimax(self, action, hole_card, round_state):
-    hole_cards = gen_cards(hole_card) # Generate Card objects for hole cards
-    community_cards = gen_cards(round_state["community_card"]) # Generate Card objects for community cards
-    street = round_state["street"] # Obtain street from round_state
-    equity = estimate_hole_card_win_rate(self.simulation_count(street), 2, hole_cards, community_cards) # Compute equity using Monte Carlo simulations
-    pot_amount = round_state["pot"]["main"]["amount"] # Obtain pot amount from round_state
-    player_bet, opponent_bet = self.compute_bets(round_state) # Compute the bets set by the player and opponent
-    current_bet = max(player_bet, opponent_bet) # Max bet is the current bet of the round
-    call_cost = max(0, current_bet - player_bet) # Compute the cost to call
-    raise_cost = self.raise_cost(round_state, player_bet, current_bet) # Compute the cost to raise
-    buckets = self.get_buckets(equity, pot_amount, hole_cards, community_cards, round_state) # Groups hands into buckets based on strategic similiarity
-
+  def expectiminimax(self, action, context, depth):
     if action == "fold":
-      return self.get_fold_value(call_cost, player_bet)
+      return self.get_fold_value(context["call_cost"], context["player_bet"])
 
     if action == "call":
-      return self.get_call_value(equity, pot_amount, call_cost, buckets)
+      return self.get_call_value(context, depth)
 
     if action == "raise":
-      return self.get_raise_value(equity, pot_amount, raise_cost, buckets, street)
+      if context["raises_left"] <= 0:
+        return self.get_call_value(context, depth)
+      return self.get_raise_value(context, depth)
 
     return float("-inf")
+
+  def get_call_value(self, context, depth):
+    equity = context["equity"]
+    pot_amount = context["pot_amount"]
+    call_cost = context["call_cost"]
+    buckets = context["buckets"]
+
+    current_ev = self.leaf_value(equity, pot_amount + call_cost, call_cost)
+    if call_cost == 0:
+      current_ev *= 1.25
+
+    if depth <= 1 or self.next_street(context["street"]) is None:
+      return self.apply_bucket_adjustments(current_ev, call_cost, buckets, is_raise=False)
+
+    future_context = self.advance_context(context, pot_amount + call_cost, 0)
+    future_ev = self.best_future_choice(future_context, depth - 1)
+    weight = 1.0 if context["street"] == "river" else 0.55
+    value = (weight * current_ev) + ((1.0 - weight) * future_ev)
+    return self.apply_bucket_adjustments(value, call_cost, buckets, is_raise=False)
+
+  def get_raise_value(self, context, depth):
+    equity = context["equity"]
+    pot_amount = context["pot_amount"]
+    raise_cost = context["raise_cost"]
+    street = context["street"]
+    buckets = context["buckets"]
+    opponent_model = context["opponent_model"]
+
+    fold_probability = self.clamp(opponent_model.fold_probability(), 0.08, 0.55)
+    call_probability = self.clamp(opponent_model.call_probability(), 0.10, 0.75)
+    raise_probability = max(0.0, 1.0 - fold_probability - call_probability)
+    normalizer = fold_probability + call_probability + raise_probability
+    fold_probability /= normalizer
+    call_probability /= normalizer
+    raise_probability /= normalizer
+
+    immediate_win_ev = pot_amount
+    called_pot = pot_amount + (2 * raise_cost)
+    called_ev = self.leaf_value(equity, called_pot, raise_cost)
+
+    if depth > 1 and self.next_street(street) is not None:
+      future_context = self.advance_context(context, called_pot, 0)
+      future_ev = self.best_future_choice(future_context, depth - 1)
+      called_ev = (0.55 * called_ev) + (0.45 * future_ev)
+
+    if depth <= 1 or context["raises_left"] <= 1:
+      reraise_ev = max(
+        self.get_fold_value(self.get_street_bet_size(street), raise_cost),
+        self.leaf_value(equity, called_pot + self.get_street_bet_size(street), raise_cost + self.get_street_bet_size(street))
+      )
+    else:
+      reraise_context = dict(context)
+      reraise_context["pot_amount"] = called_pot + self.get_street_bet_size(street)
+      reraise_context["call_cost"] = self.get_street_bet_size(street)
+      reraise_context["raises_left"] = context["raises_left"] - 1
+      reraise_ev = self.best_future_choice(reraise_context, depth - 1)
+
+    value = (
+      fold_probability * immediate_win_ev
+      + call_probability * called_ev
+      + raise_probability * reraise_ev
+    )
+    return self.apply_bucket_adjustments(value, raise_cost, buckets, is_raise=True)
+
+  def best_future_choice(self, context, depth):
+    delta = self.equity_rate_change(context["street"])
+    future_equities = [
+      self.clamp(context["equity"] - delta, 0.0, 1.0),
+      context["equity"],
+      self.clamp(context["equity"] + delta, 0.0, 1.0),
+    ]
+
+    best = float("-inf")
+    for action in ("fold", "call", "raise"):
+      total = 0.0
+      for equity in future_equities:
+        future_context = dict(context)
+        future_context["equity"] = equity
+        future_context["buckets"] = self.get_buckets(
+          equity,
+          future_context["pot_amount"],
+          future_context["hole_cards"],
+          future_context["community_cards"],
+          future_context["round_state"]
+        )
+        total += self.expectiminimax(action, future_context, depth)
+      best = max(best, total / len(future_equities))
+
+    return best
+
+  def build_context(self, hole_card, round_state):
+    hole_cards = gen_cards(hole_card)
+    community_cards = gen_cards(round_state["community_card"])
+    street = round_state["street"]
+    equity = estimate_hole_card_win_rate(
+      self.simulation_count(street),
+      2,
+      hole_cards,
+      community_cards
+    )
+    pot_amount = round_state["pot"]["main"]["amount"]
+    player_bet, opponent_bet = self.compute_bets(round_state)
+    current_bet = max(player_bet, opponent_bet)
+    call_cost = max(0, current_bet - player_bet)
+    raise_cost = self.raise_cost(round_state, player_bet, current_bet)
+
+    return {
+      "hole_cards": hole_cards,
+      "community_cards": community_cards,
+      "round_state": round_state,
+      "street": street,
+      "equity": equity,
+      "pot_amount": pot_amount,
+      "player_bet": player_bet,
+      "opponent_bet": opponent_bet,
+      "call_cost": call_cost,
+      "raise_cost": raise_cost,
+      "raises_left": self.raises_left(round_state),
+      "opponent_model": self.build_opponent_model(round_state),
+      "buckets": self.get_buckets(equity, pot_amount, hole_cards, community_cards, round_state),
+    }
+
+  def advance_context(self, context, pot_amount, call_cost):
+    next_context = dict(context)
+    next_context["street"] = self.next_street(context["street"]) or context["street"]
+    next_context["pot_amount"] = pot_amount
+    next_context["call_cost"] = call_cost
+    next_context["raise_cost"] = self.get_street_bet_size(next_context["street"])
+    next_context["raises_left"] = 4
+    return next_context
+
+  def leaf_value(self, equity, pot_amount, contribution):
+    return (equity * pot_amount) - ((1.0 - equity) * contribution)
+
+  def apply_bucket_adjustments(self, value, cost, buckets, is_raise):
+    if is_raise:
+      value += 6.0 * buckets["equity"] * buckets["pot"]
+      value += 8.0 * buckets["hand"]
+      value += 6.0 * buckets["potential"] * (1.0 - buckets["opponent"])
+      value -= buckets["pressure"] * cost * 0.25
+    else:
+      value += 3.0 * buckets["pot"]
+      value += 5.0 * buckets["potential"]
+      value += 4.0 * buckets["hand"]
+      value -= 3.0 * buckets["pressure"]
+      value -= buckets["behavior"] * cost * 0.25
+    return value
+
+  def get_fold_value(self, call_cost, player_cost):
+    if call_cost == 0:
+      return -1000.0
+    return -0.25 * player_cost
 
   def get_buckets(self, equity, pot_amount, hole_cards, community_cards, round_state):
     behavior = self.get_opponent_strategy(round_state)
@@ -78,7 +276,6 @@ class CustomPlayer(BasePokerPlayer):
         continue
 
       amount = action["amount"]
-
       if action.get("uuid") == self.uuid:
         player_bet = max(player_bet, amount)
       else:
@@ -87,7 +284,7 @@ class CustomPlayer(BasePokerPlayer):
     return player_bet, opponent_bet
 
   def get_street_bet_size(self, street):
-    if street in ["preflop", "flop"]:
+    if street in ("preflop", "flop"):
       return 20
     return 40
 
@@ -95,52 +292,36 @@ class CustomPlayer(BasePokerPlayer):
     total_cost = current_bet + self.get_street_bet_size(round_state["street"])
     return max(0, total_cost - player_bet)
 
-  def get_fold_value(self, call_cost, player_cost):
-    if call_cost == 0:
-      return -1000.0
-    return -0.25 * player_cost
+  def raises_left(self, round_state):
+    histories = round_state["action_histories"].get(round_state["street"], [])
+    raises = sum(1 for action in histories if action["action"] == "RAISE")
+    return max(0, 4 - raises)
 
-  def get_call_value(self, equity, pot_amount, call_cost, buckets):
-    showdown_ev = equity * (pot_amount + call_cost) - call_cost
-
-    if call_cost == 0:
-      return showdown_ev * 1.25
-
-    pot_amount_bonus = 3.0 * buckets["pot"]
-    potential_bonus = 5.0 * buckets["potential"]
-    hand_bonus = 4.0 * buckets["hand"]
-    pressure_penalty = 3.0 * buckets["pressure"]
-    opponent_behavior_penalty = buckets["behavior"] * call_cost * 0.25
-
-    return showdown_ev + pot_amount_bonus + potential_bonus + hand_bonus - pressure_penalty - opponent_behavior_penalty
-
-  def get_raise_value(self, equity, pot_amount, raise_cost, buckets, street):
-    fold_probability = self.get_fold_probability(buckets, street)
-    raise_probability = 1.0 - fold_probability
-    called_pot = pot_amount + (2 * raise_cost)
-
-    immediate_win_ev = fold_probability * pot_amount
-    called_ev = raise_probability * (equity * called_pot - raise_cost)
-    value_bonus = 6.0 * buckets["equity"] * buckets["pot"]
-    made_hand_bonus = 8.0 * buckets["hand"]
-    semi_bluff_bonus = 6.0 * buckets["potential"] * (1.0 - buckets["opponent"])
-    pressure_penalty = buckets["pressure"] * raise_cost * 0.25
-
-    return immediate_win_ev + called_ev + value_bonus + made_hand_bonus + semi_bluff_bonus - pressure_penalty
-
-  def get_fold_probability(self, buckets, street):
-    probability = 0.25
-    probability += 0.04 * (1.0 - buckets["opponent"])
-    probability += 0.05 * buckets["equity"]
-    probability += 0.04 * buckets["hand"]
-    probability += 0.03 * buckets["pressure"]
-
+  def next_street(self, street):
     if street == "preflop":
-      probability += 0.04
-    elif street == "river":
-      probability -= 0.04
+      return "flop"
+    if street == "flop":
+      return "turn"
+    if street == "turn":
+      return "river"
+    return None
 
-    return min(0.55, max(0.08, probability))
+  def equity_rate_change(self, street):
+    if street == "preflop":
+      return 0.20
+    if street == "flop":
+      return 0.12
+    if street == "turn":
+      return 0.07
+    return 0.0
+
+  def build_opponent_model(self, round_state):
+    model = OpponentModel()
+    for histories in round_state["action_histories"].values():
+      for action in histories:
+        if action.get("uuid") != self.uuid:
+          model.observe(action["action"])
+    return model
 
   def get_equity_bucket(self, equity):
     if equity < 0.35:
@@ -211,7 +392,6 @@ class CustomPlayer(BasePokerPlayer):
       window = set(range(low_rank, low_rank + 5))
       if len(window.intersection(ranks)) >= 4:
         return True
-
     return False
 
   def get_pair_or_better(self, cards):
@@ -229,11 +409,7 @@ class CustomPlayer(BasePokerPlayer):
 
   def get_pressure_bucket(self, round_state):
     histories = round_state["action_histories"].get(round_state["street"], [])
-    raises = 0
-
-    for action in histories:
-      if action["action"] == "RAISE":
-        raises += 1
+    raises = sum(1 for action in histories if action["action"] == "RAISE")
 
     if raises == 0:
       return 0.0
@@ -242,28 +418,11 @@ class CustomPlayer(BasePokerPlayer):
     return 1.0
 
   def get_opponent_strategy(self, round_state):
-    raises = 0
-    calls = 0
-    folds = 0
+    model = self.build_opponent_model(round_state)
+    return model.aggression_factor()
 
-    for histories in round_state["action_histories"].values():
-      for action in histories:
-        if action.get("uuid") == self.uuid:
-          continue
-
-        if action["action"] == "RAISE":
-          raises += 1
-        elif action["action"] == "CALL":
-          calls += 1
-        elif action["action"] == "FOLD":
-          folds += 1
-
-    for stats in self.opponent_stats.values():
-      raises += stats["raises"]
-      calls += stats["calls"]
-      folds += stats["folds"]
-
-    return (raises + 0.5) / (raises + calls + folds + 1.5)
+  def clamp(self, value, low, high):
+    return min(high, max(low, value))
 
   def receive_game_start_message(self, game_info):
     pass
