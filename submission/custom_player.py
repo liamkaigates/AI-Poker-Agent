@@ -65,6 +65,10 @@ class OpponentModel:
 
 class CustomPlayer(BasePokerPlayer):
 
+  def __init__(self):
+    super(CustomPlayer, self).__init__()
+    self.opponent_model = OpponentModel()
+
   def declare_action(self, valid_actions, hole_card, round_state):
     actions = [action["action"] for action in valid_actions]
     context = self.build_context(hole_card, round_state)
@@ -129,7 +133,8 @@ class CustomPlayer(BasePokerPlayer):
     raise_probability /= normalizer
 
     immediate_win_ev = pot_amount
-    called_pot = pot_amount + (2 * raise_cost)
+    opponent_call_cost = self.get_street_bet_size(street)
+    called_pot = pot_amount + raise_cost + opponent_call_cost
     called_ev = self.leaf_value(equity, called_pot, raise_cost)
 
     if depth > 1 and self.next_street(street) is not None:
@@ -175,7 +180,8 @@ class CustomPlayer(BasePokerPlayer):
           future_context["pot_amount"],
           future_context["hole_cards"],
           future_context["community_cards"],
-          future_context["round_state"]
+          future_context["round_state"],
+          future_context["opponent_model"].aggression_factor()
         )
         total += self.expectiminimax(action, future_context, depth)
       best = max(best, total / len(future_equities))
@@ -197,6 +203,8 @@ class CustomPlayer(BasePokerPlayer):
     current_bet = max(player_bet, opponent_bet)
     call_cost = max(0, current_bet - player_bet)
     raise_cost = self.raise_cost(round_state, player_bet, current_bet)
+    opponent_model = self.build_opponent_model(round_state)
+    behavior = opponent_model.aggression_factor()
 
     return {
       "hole_cards": hole_cards,
@@ -210,8 +218,8 @@ class CustomPlayer(BasePokerPlayer):
       "call_cost": call_cost,
       "raise_cost": raise_cost,
       "raises_left": self.raises_left(round_state),
-      "opponent_model": self.build_opponent_model(round_state),
-      "buckets": self.get_buckets(equity, pot_amount, hole_cards, community_cards, round_state),
+      "opponent_model": opponent_model,
+      "buckets": self.get_buckets(equity, pot_amount, hole_cards, community_cards, round_state, behavior),
     }
 
   def advance_context(self, context, pot_amount, call_cost):
@@ -224,7 +232,7 @@ class CustomPlayer(BasePokerPlayer):
     return next_context
 
   def leaf_value(self, equity, pot_amount, contribution):
-    return (equity * pot_amount) - ((1.0 - equity) * contribution)
+    return (equity * pot_amount) - contribution
 
   def apply_bucket_adjustments(self, value, cost, buckets, is_raise):
     if is_raise:
@@ -245,8 +253,9 @@ class CustomPlayer(BasePokerPlayer):
       return -1000.0
     return -0.25 * player_cost
 
-  def get_buckets(self, equity, pot_amount, hole_cards, community_cards, round_state):
-    behavior = self.get_opponent_strategy(round_state)
+  def get_buckets(self, equity, pot_amount, hole_cards, community_cards, round_state, behavior=None):
+    if behavior is None:
+      behavior = self.get_opponent_strategy(round_state)
     return {
       "equity": self.get_equity_bucket(equity),
       "hand": self.get_hand_bucket(hole_cards, community_cards),
@@ -316,6 +325,9 @@ class CustomPlayer(BasePokerPlayer):
     return 0.0
 
   def build_opponent_model(self, round_state):
+    if self.opponent_model.total > 0:
+      return self.opponent_model
+
     model = OpponentModel()
     for histories in round_state["action_histories"].values():
       for action in histories:
