@@ -106,7 +106,7 @@ class CustomPlayer(BasePokerPlayer):
     if call_cost == 0:
       return showdown_ev * 1.25
 
-    pot_amount_bonus = 3.0 * buckets["pot_amount"]
+    pot_amount_bonus = 3.0 * buckets["pot"]
     potential_bonus = 5.0 * buckets["potential"]
     hand_bonus = 4.0 * buckets["hand"]
     pressure_penalty = 3.0 * buckets["pressure"]
@@ -114,13 +114,13 @@ class CustomPlayer(BasePokerPlayer):
 
     return showdown_ev + pot_amount_bonus + potential_bonus + hand_bonus - pressure_penalty - opponent_behavior_penalty
 
-  def _raise_value(self, equity, pot_amount, raise_cost, buckets, street):
+  def get_raise_value(self, equity, pot_amount, raise_cost, buckets, street):
     fold_probability = self.get_fold_probability(buckets, street)
     raise_probability = 1.0 - fold_probability
     called_pot = pot_amount + (2 * raise_cost)
 
     immediate_win_ev = fold_probability * pot_amount
-    called_ev = continue_probability * (equity * called_pot - raise_cost)
+    called_ev = raise_probability * (equity * called_pot - raise_cost)
     value_bonus = 6.0 * buckets["equity"] * buckets["pot"]
     made_hand_bonus = 8.0 * buckets["hand"]
     semi_bluff_bonus = 6.0 * buckets["potential"] * (1.0 - buckets["opponent"])
@@ -151,7 +151,7 @@ class CustomPlayer(BasePokerPlayer):
       return 0.8
     return 1.0
 
-  def get_pot_bucket(self, pot):
+  def get_pot_amount_bucket(self, pot):
     if pot < 80:
       return 0.0
     if pot < 180:
@@ -232,7 +232,7 @@ class CustomPlayer(BasePokerPlayer):
     raises = 0
 
     for action in histories:
-      if action_state["action"] == "RAISE":
+      if action["action"] == "RAISE":
         raises += 1
 
     if raises == 0:
@@ -247,15 +247,15 @@ class CustomPlayer(BasePokerPlayer):
     folds = 0
 
     for histories in round_state["action_histories"].values():
-      for action_state in histories:
-        if action_state.get("uuid") == self.uuid:
+      for action in histories:
+        if action.get("uuid") == self.uuid:
           continue
 
-        if action_state["action"] == "RAISE":
+        if action["action"] == "RAISE":
           raises += 1
-        elif action_state["action"] == "CALL":
+        elif action["action"] == "CALL":
           calls += 1
-        elif action_state["action"] == "FOLD":
+        elif action["action"] == "FOLD":
           folds += 1
 
     for stats in self.opponent_stats.values():
