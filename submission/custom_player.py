@@ -1,8 +1,7 @@
 from pypokerengine.players import BasePokerPlayer
 from pypokerengine.engine.hand_evaluator import HandEvaluator
 from pypokerengine.utils.card_utils import gen_cards, estimate_hole_card_win_rate
-from time import sleep
-import pprint
+from dataclasses import dataclass, field
 
 MAX_DEPTH = 3 # Max depth for expectiminimax tree search
 ACTION_LIKELIHOODS = { # We define 5 levels of hand strength and the likelihood of each action given the respective hand strength
@@ -10,6 +9,21 @@ ACTION_LIKELIHOODS = { # We define 5 levels of hand strength and the likelihood 
   "call": [0.30, 0.45, 0.50, 0.37, 0.27],
   "raise": [0.10, 0.20, 0.30, 0.55, 0.70],
 }
+
+
+@dataclass
+class EvaluationWeights:
+    strength: float = 7.0
+    pot: float = 1.0
+    behavior: float = 0.5
+
+
+@dataclass
+class SearchConfig:
+  max_depth: int = MAX_DEPTH
+  chance_samples: int = 1
+  random_seed: int | None = None
+  weights: EvaluationWeights = field(default_factory=EvaluationWeights)
 
 
 class OpponentModel:
@@ -65,9 +79,11 @@ class OpponentModel:
 
 class CustomPlayer(BasePokerPlayer):
 
-  def __init__(self):
+  def __init__(self, verbose_thinking=False):
     super(CustomPlayer, self).__init__()
     self.opponent_model = OpponentModel()
+    self.verbose_thinking = verbose_thinking
+    self.search_config = SearchConfig()
 
   def declare_action(self, valid_actions, hole_card, round_state):
     actions = [action["action"] for action in valid_actions]
@@ -76,7 +92,7 @@ class CustomPlayer(BasePokerPlayer):
     best_value = float("-inf")
 
     for action in actions:
-      value = self.expectiminimax(action, context, MAX_DEPTH)
+      value = self.expectiminimax(action, context, self.search_config.max_depth)
       if value > best_value:
         best_action = action
         best_value = value
@@ -103,7 +119,7 @@ class CustomPlayer(BasePokerPlayer):
     call_cost = context["call_cost"]
     buckets = context["buckets"]
 
-    current_ev = self.leaf_value(equity, pot_amount + call_cost, call_cost)
+    current_ev = self.leaf_value(equity, pot_amount + call_cost, call_cost, street=context["street"])
     if call_cost == 0:
       current_ev *= 1.25
 
@@ -135,7 +151,7 @@ class CustomPlayer(BasePokerPlayer):
     immediate_win_ev = pot_amount
     opponent_call_cost = self.get_street_bet_size(street)
     called_pot = pot_amount + raise_cost + opponent_call_cost
-    called_ev = self.leaf_value(equity, called_pot, raise_cost)
+    called_ev = self.leaf_value(equity, called_pot, raise_cost, street=street)
 
     if depth > 1 and self.next_street(street) is not None:
       future_context = self.advance_context(context, called_pot, 0)
@@ -145,7 +161,12 @@ class CustomPlayer(BasePokerPlayer):
     if depth <= 1 or context["raises_left"] <= 1:
       reraise_ev = max(
         self.get_fold_value(self.get_street_bet_size(street), raise_cost),
-        self.leaf_value(equity, called_pot + self.get_street_bet_size(street), raise_cost + self.get_street_bet_size(street))
+        self.leaf_value(
+          equity,
+          called_pot + self.get_street_bet_size(street),
+          raise_cost + self.get_street_bet_size(street),
+          street=street
+        )
       )
     else:
       reraise_context = dict(context)
@@ -231,21 +252,41 @@ class CustomPlayer(BasePokerPlayer):
     next_context["raises_left"] = 4
     return next_context
 
-  def leaf_value(self, equity, pot_amount, contribution):
-    return (equity * pot_amount) - contribution
+  def leaf_value(self, equity, pot_amount, contribution, street=None):
+    base_ev = (equity * pot_amount) - contribution
+
+    # Risk aversion: avoid marginal negative swing spots
+    risk_penalty = (1.0 - equity) * contribution * 0.35
+
+    # Pot-odds penalty when equity is below break-even
+    breakeven = contribution / max(1.0, pot_amount + contribution)
+    pot_odds_penalty = 0.0
+    if equity < breakeven:
+        pot_odds_penalty = (breakeven - equity) * contribution * 1.2
+
+    # Street confidence
+    confidence = {
+        "preflop": 0.88,
+        "flop": 0.93,
+        "turn": 0.97,
+        "river": 1.0,
+    }.get(street, 1.0)
+
+    return (base_ev - risk_penalty - pot_odds_penalty) * confidence
 
   def apply_bucket_adjustments(self, value, cost, buckets, is_raise):
+    weights = self.search_config.weights
     if is_raise:
-      value += 6.0 * buckets["equity"] * buckets["pot"]
-      value += 8.0 * buckets["hand"]
+      value += weights.pot * buckets["equity"] * buckets["pot"]
+      value += weights.strength * buckets["hand"]
       value += 6.0 * buckets["potential"] * (1.0 - buckets["opponent"])
       value -= buckets["pressure"] * cost * 0.25
     else:
-      value += 3.0 * buckets["pot"]
+      value += weights.pot * buckets["pot"]
       value += 5.0 * buckets["potential"]
-      value += 4.0 * buckets["hand"]
+      value += weights.strength * buckets["hand"]
       value -= 3.0 * buckets["pressure"]
-      value -= buckets["behavior"] * cost * 0.25
+      value -= weights.behavior * buckets["behavior"] * cost * 0.25
     return value
 
   def get_fold_value(self, call_cost, player_cost):
