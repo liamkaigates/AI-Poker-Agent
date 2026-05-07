@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 import argparse
+import json
 import random
 import sys
+import time
 from collections import deque
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
-from typing import Deque, List, Sequence, Tuple
+from typing import Any, Deque, Dict, List, Sequence, Tuple
 
 # Repo root on sys.path so `python self_play_eval_weights.py` finds `submission`.
 _REPO_ROOT = Path(__file__).resolve().parent
@@ -21,26 +25,63 @@ except ImportError:  # pragma: no cover
     tqdm = None  # type: ignore[misc, assignment]
 
 
-WEIGHT_ATTRS: Tuple[str, ...] = ("strength", "pot", "behavior")
+WEIGHT_ATTRS: Tuple[str, ...] = tuple(field.name for field in fields(EvaluationWeights))
 WEIGHT_COORD_LO = 0.02
 WEIGHT_COORD_HI = 8.0
+WEIGHT_BOUNDS: Dict[str, Tuple[float, float]] = {
+    "behavior": (0.02, 4.0),
+    "cost": (0.0, 1.5),
+    "risk": (0.0, 2.0),
+}
 
 
 def _fmt_weights(weights: EvaluationWeights) -> str:
-    return (
-        "EvaluationWeights("
-        f"strength={weights.strength:.2f}, "
-        f"pot={weights.pot:.2f}, "
-        f"behavior={weights.behavior:.2f})"
-    )
+    values = ", ".join(f"{attr}={getattr(weights, attr):.2f}" for attr in WEIGHT_ATTRS)
+    return f"EvaluationWeights({values})"
+
+
+def _weights_to_dict(weights: EvaluationWeights) -> Dict[str, float]:
+    return {attr: float(getattr(weights, attr)) for attr in WEIGHT_ATTRS}
+
+
+def _settings_to_dict(args: argparse.Namespace) -> Dict[str, Any]:
+    return {
+        "iterations": args.iterations,
+        "delta": args.delta,
+        "step_scale": args.step_scale,
+        "delta_decay_ratio": args.delta_decay_ratio,
+        "history_len": args.history_len,
+        "history_opponents": args.history_opponents,
+        "initial_random_history": args.initial_random_history,
+        "games_per_opp": args.games_per_opp,
+        "rounds": args.rounds,
+        "stack": args.stack,
+        "sb": args.sb,
+        "max_depth": args.max_depth,
+        "chance_samples": args.chance_samples,
+        "seed": args.seed,
+        "weight_bounds": {
+            attr: list(_weight_bounds(attr))
+            for attr in WEIGHT_ATTRS
+        },
+    }
+
+
+def _write_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as output_file:
+        json.dump(payload, output_file, indent=2, sort_keys=True)
 
 
 def _random_evaluation_weights(rng: random.Random) -> EvaluationWeights:
-    return EvaluationWeights(
-        strength=rng.uniform(WEIGHT_COORD_LO, WEIGHT_COORD_HI),
-        pot=rng.uniform(WEIGHT_COORD_LO, WEIGHT_COORD_HI),
-        behavior=rng.uniform(WEIGHT_COORD_LO, WEIGHT_COORD_HI),
-    )
+    return EvaluationWeights(**{
+        attr: rng.uniform(*_weight_bounds(attr))
+        for attr in WEIGHT_ATTRS
+    })
+
+
+def _weight_bounds(attr: str) -> Tuple[float, float]:
+    return WEIGHT_BOUNDS.get(attr, (WEIGHT_COORD_LO, WEIGHT_COORD_HI))
 
 
 def _player_with_weights(
@@ -204,8 +245,7 @@ def _perturb(
     on the perturbed coordinate (handles clamping at bounds).
     """
     base = getattr(w, attr)
-    lo = WEIGHT_COORD_LO
-    hi = WEIGHT_COORD_HI
+    lo, hi = _weight_bounds(attr)
     plus_v = min(hi, base + delta)
     minus_v = max(lo, base - delta)
     span = plus_v - minus_v
@@ -244,18 +284,22 @@ def train_self_play(
     verbose: bool,
     initial_random_history: int,
     progress: bool = True,
-) -> EvaluationWeights:
+) -> Tuple[EvaluationWeights, Dict[str, Any]]:
     rng = random.Random(seed)
     w = EvaluationWeights()
     history: Deque[EvaluationWeights] = deque(maxlen=history_maxlen)
     for _ in range(max(0, initial_random_history)):
         history.append(_random_evaluation_weights(rng))
 
+    trace: List[Dict[str, Any]] = []
+    best_weights = replace(w)
+    best_score = float("-inf")
+
     if verbose:
         if initial_random_history > 0:
             print(
                 f"History queue seeded with {len(history)} random profile(s) "
-                f"(uniform per coord in [{WEIGHT_COORD_LO}, {WEIGHT_COORD_HI}]):",
+                "(uniform within each coordinate's configured bounds):",
                 flush=True,
             )
             for i, rw in enumerate(history):
@@ -275,6 +319,7 @@ def train_self_play(
                 flush=True,
             )
 
+        updates: List[Dict[str, Any]] = []
         for attr in WEIGHT_ATTRS:
             w_plus, w_minus, span = _perturb(w, attr, delta_t)
 
@@ -307,7 +352,7 @@ def train_self_play(
                 pbar_desc=f"iter {it + 1}/{iterations} {attr} w-",
             )
 
-            skip_update = mean_plus < 0.0 and mean_minus < 0.0
+            skip_update = False
             diff = mean_plus - mean_minus
             base = getattr(w, attr)
 
@@ -325,7 +370,7 @@ def train_self_play(
                 cap = max_weight_step_t
                 step = max(-cap, min(cap, step))
                 new_val = base + step
-                new_val = max(WEIGHT_COORD_LO, min(WEIGHT_COORD_HI, new_val))
+                new_val = max(_weight_bounds(attr)[0], min(_weight_bounds(attr)[1], new_val))
                 w = replace(w, **{attr: new_val})
 
             if verbose:
@@ -337,29 +382,81 @@ def train_self_play(
                     flush=True,
                 )
 
+            updates.append({
+                "attribute": attr,
+                "status": "skip" if skip_update else "apply",
+                "base": base,
+                "new": new_val,
+                "plus_weights": _weights_to_dict(w_plus),
+                "minus_weights": _weights_to_dict(w_minus),
+                "mean_plus": mean_plus,
+                "mean_minus": mean_minus,
+                "gradient_estimate": grad_est,
+                "raw_step": raw_step,
+                "clipped_step": step,
+                "span": span,
+            })
+
         history.append(w_frozen)
 
         if verbose:
             print(f"  end={_fmt_weights(w)}", flush=True)
 
-    return w
+        iteration_score = mean_return_vs_opponents(
+            w,
+            opponents,
+            games_per_opp=games_per_opp,
+            max_round=max_round,
+            initial_stack=initial_stack,
+            small_blind=small_blind,
+            rng=rng,
+            max_depth=max_depth,
+            chance_samples=chance_samples,
+            progress=progress,
+            pbar_leave=False,
+            pbar_desc=f"iter {it + 1}/{iterations} final",
+        )
+        if iteration_score > best_score:
+            best_score = iteration_score
+            best_weights = replace(w)
+
+        trace.append({
+            "iteration": it + 1,
+            "delta": delta_t,
+            "start_weights": _weights_to_dict(w_frozen),
+            "end_weights": _weights_to_dict(w),
+            "mean_return": iteration_score,
+            "best_mean_return_so_far": best_score,
+            "opponents": [_weights_to_dict(ow) for ow in opponents],
+            "updates": updates,
+        })
+
+        if verbose:
+            print(f"  validation_mean_return={iteration_score:+.2f}", flush=True)
+
+    return w, {
+        "final_weights": _weights_to_dict(w),
+        "best_weights": _weights_to_dict(best_weights),
+        "best_mean_return": best_score,
+        "history": trace,
+    }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Self-play tuning of CustomPlayer EvaluationWeights (strength/pot/behavior)",
+        description="Self-play tuning of CustomPlayer linear bucket EvaluationWeights",
     )
     parser.add_argument(
         "--iterations",
         type=int,
-        default=20,
-        help="outer loops; each loop updates strength, then pot, then behavior",
+        default=8,
+        help="outer loops; each loop updates every EvaluationWeights coordinate",
     )
-    parser.add_argument("--delta", type=float, default=1.0, help="symmetric FD step")
+    parser.add_argument("--delta", type=float, default=0.5, help="symmetric finite-difference step")
     parser.add_argument(
         "--step-scale",
         type=float,
-        default=0.02,
+        default=0.005,
         help="multiplier on finite-difference gradient estimate",
     )
     parser.add_argument(
@@ -378,21 +475,27 @@ def main() -> None:
     parser.add_argument(
         "--initial-random-history",
         type=int,
-        default=4,
+        default=6,
         help="number of random EvaluationWeights to enqueue before training (0 disables)",
     )
-    parser.add_argument("--games-per-opp", type=int, default=1)
-    parser.add_argument("--rounds", type=int, default=15, help="hands per match")
-    parser.add_argument("--stack", type=int, default=2000)
+    parser.add_argument("--games-per-opp", type=int, default=3)
+    parser.add_argument("--rounds", type=int, default=50, help="hands per match")
+    parser.add_argument("--stack", type=int, default=4000)
     parser.add_argument("--sb", type=int, default=10)
-    parser.add_argument("--max-depth", type=int, default=4)
-    parser.add_argument("--chance-samples", type=int, default=2)
+    parser.add_argument("--max-depth", type=int, default=2)
+    parser.add_argument("--chance-samples", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("-q", "--quiet", action="store_true")
     parser.add_argument(
         "--no-progress",
         action="store_true",
         help="disable tqdm progress bars",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("log.json"),
+        help="JSON file where training settings, history, and weights are written",
     )
     args = parser.parse_args()
     if args.delta <= 0.0:
@@ -401,8 +504,9 @@ def main() -> None:
         raise ValueError("--delta-decay-ratio must be in (0, 1]")
 
     show_progress = (not args.quiet) and (not args.no_progress)
+    start = time.time()
 
-    final_w = train_self_play(
+    final_w, results = train_self_play(
         iterations=args.iterations,
         delta=args.delta,
         delta_decay_ratio=args.delta_decay_ratio,
@@ -420,8 +524,14 @@ def main() -> None:
         initial_random_history=args.initial_random_history,
         progress=show_progress,
     )
+    results["elapsed_seconds"] = round(time.time() - start, 3)
+    results["settings"] = _settings_to_dict(args)
+    _write_json(args.output, results)
+
     if not args.quiet:
         print("Final weights:", _fmt_weights(final_w), flush=True)
+        print("Best weights:", _fmt_weights(EvaluationWeights(**results["best_weights"])), flush=True)
+        print("Wrote", args.output, flush=True)
     else:
         print(_fmt_weights(final_w))
 

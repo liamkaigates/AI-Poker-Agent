@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 from pypokerengine.players import BasePokerPlayer
 from pypokerengine.engine.hand_evaluator import HandEvaluator
 from pypokerengine.utils.card_utils import gen_cards, estimate_hole_card_win_rate
 from dataclasses import dataclass, field
 
-MAX_DEPTH = 3 # Max depth for expectiminimax tree search
+MAX_DEPTH = 2 # Max depth for expectiminimax tree search
 ACTION_LIKELIHOODS = { # We define 5 levels of hand strength and the likelihood of each action given the respective hand strength
   "fold": [0.60, 0.35, 0.20, 0.08, 0.03],
   "call": [0.30, 0.45, 0.50, 0.37, 0.27],
@@ -13,9 +15,15 @@ ACTION_LIKELIHOODS = { # We define 5 levels of hand strength and the likelihood 
 
 @dataclass
 class EvaluationWeights:
-    strength: float = 7.0
+    equity: float = 2.0
+    hand: float = 7.0
+    potential: float = 5.0
     pot: float = 1.0
+    opponent: float = 0.8
+    pressure: float = 3.0
     behavior: float = 0.5
+    cost: float = 0.10
+    risk: float = 0.35
 
 
 @dataclass
@@ -253,10 +261,11 @@ class CustomPlayer(BasePokerPlayer):
     return next_context
 
   def leaf_value(self, equity, pot_amount, contribution, street=None):
+    weights = self.search_config.weights
     base_ev = (equity * pot_amount) - contribution
 
     # Risk aversion: avoid marginal negative swing spots
-    risk_penalty = (1.0 - equity) * contribution * 0.35
+    risk_penalty = (1.0 - equity) * contribution * weights.risk
 
     # Pot-odds penalty when equity is below break-even
     breakeven = contribution / max(1.0, pot_amount + contribution)
@@ -275,19 +284,24 @@ class CustomPlayer(BasePokerPlayer):
     return (base_ev - risk_penalty - pot_odds_penalty) * confidence
 
   def apply_bucket_adjustments(self, value, cost, buckets, is_raise):
-    weights = self.search_config.weights
+    value += self.bucket_linear_value(buckets, cost)
     if is_raise:
-      value += weights.pot * buckets["equity"] * buckets["pot"]
-      value += weights.strength * buckets["hand"]
-      value += 6.0 * buckets["potential"] * (1.0 - buckets["opponent"])
-      value -= buckets["pressure"] * cost * 0.25
-    else:
-      value += weights.pot * buckets["pot"]
-      value += 5.0 * buckets["potential"]
-      value += weights.strength * buckets["hand"]
-      value -= 3.0 * buckets["pressure"]
-      value -= weights.behavior * buckets["behavior"] * cost * 0.25
+      value += buckets["potential"] * (1.0 - buckets["opponent"])
+      value -= buckets["pressure"] * cost * 0.05
     return value
+
+  def bucket_linear_value(self, buckets, cost):
+    weights = self.search_config.weights
+    return (
+      weights.equity * buckets["equity"]
+      + weights.hand * buckets["hand"]
+      + weights.potential * buckets["potential"]
+      + weights.pot * buckets["pot"]
+      - weights.opponent * buckets["opponent"]
+      - weights.pressure * buckets["pressure"]
+      - weights.behavior * buckets["behavior"] * cost * 0.25
+      - weights.cost * cost
+    )
 
   def get_fold_value(self, call_cost, player_cost):
     if call_cost == 0:

@@ -1,0 +1,254 @@
+{
+  "best_mean_return": 84.0,
+  "best_weights": {
+    "behavior": 0.02,
+    "pot": 2.0,
+    "strength": 7.9
+  },
+  "elapsed_seconds": 126.915,
+  "final_weights": {
+    "behavior": 0.02,
+    "pot": 2.0,
+    "strength": 7.9
+  },
+  "history": [
+    {
+      "best_mean_return_so_far": 40.0,
+      "delta": 1.0,
+      "end_weights": {
+        "behavior": 0.02,
+        "pot": 2.0,
+        "strength": 7.0
+      },
+      "iteration": 1,
+      "mean_return": 40.0,
+      "opponents": [
+        {
+          "behavior": 0.5,
+          "pot": 1.0,
+          "strength": 7.0
+        },
+        {
+          "behavior": 2.214733960585572,
+          "pot": 0.21958582667688215,
+          "strength": 5.122625851693912
+        },
+        {
+          "behavior": 3.3869361210884583,
+          "pot": 0.713771884382741,
+          "strength": 7.1395929502846665
+        },
+        {
+          "behavior": 4.0527351990648315,
+          "pot": 1.7647310389327548,
+          "strength": 0.25778181111580134
+        },
+        {
+          "behavior": 5.420061909634832,
+          "pot": 5.897040289028819,
+          "strength": 1.8012216904276057
+        }
+      ],
+      "start_weights": {
+        "behavior": 0.5,
+        "pot": 1.0,
+        "strength": 7.0
+      },
+      "updates": [
+        {
+          "attribute": "strength",
+          "base": 7.0,
+          "clipped_step": 0.0,
+          "gradient_estimate": 0.0,
+          "mean_minus": -18.0,
+          "mean_plus": -110.0,
+          "minus_weights": {
+            "behavior": 0.5,
+            "pot": 1.0,
+            "strength": 6.0
+          },
+          "new": 7.0,
+          "plus_weights": {
+            "behavior": 0.5,
+            "pot": 1.0,
+            "strength": 8.0
+          },
+          "raw_step": 0.0,
+          "span": 2.0,
+          "status": "skip"
+        },
+        {
+          "attribute": "pot",
+          "base": 1.0,
+          "clipped_step": 1.0,
+          "gradient_estimate": 145.45454545454547,
+          "mean_minus": -212.0,
+          "mean_plus": 76.0,
+          "minus_weights": {
+            "behavior": 0.5,
+            "pot": 0.02,
+            "strength": 7.0
+          },
+          "new": 2.0,
+          "plus_weights": {
+            "behavior": 0.5,
+            "pot": 2.0,
+            "strength": 7.0
+          },
+          "raw_step": 2.9090909090909096,
+          "span": 1.98,
+          "status": "apply"
+        },
+        {
+          "attribute": "behavior",
+          "base": 0.5,
+          "clipped_step": -1.0,
+          "gradient_estimate": -232.43243243243245,
+          "mean_minus": 18.0,
+          "mean_plus": -326.0,
+          "minus_weights": {
+            "behavior": 0.02,
+            "pot": 2.0,
+            "strength": 7.0
+          },
+          "new": 0.02,
+          "plus_weights": {
+            "behavior": 1.5,
+            "pot": 2.0,
+            "strength": 7.0
+          },
+          "raw_step": -4.648648648648649,
+          "span": 1.48,
+          "status": "apply"
+        }
+      ]
+    },
+    {
+      "best_mean_return_so_far": 84.0,
+      "delta": 0.9,
+      "end_weights": {
+        "behavior": 0.02,
+        "pot": 2.0,
+        "strength": 7.9
+      },
+      "iteration": 2,
+      "mean_return": 84.0,
+      "opponents": [
+        {
+          "behavior": 0.02,
+          "pot": 2.0,
+          "strength": 7.0
+        },
+        {
+          "behavior": 4.0527351990648315,
+          "pot": 1.7647310389327548,
+          "strength": 0.25778181111580134
+        },
+        {
+          "behavior": 3.3869361210884583,
+          "pot": 0.713771884382741,
+          "strength": 7.1395929502846665
+        },
+        {
+          "behavior": 2.214733960585572,
+          "pot": 0.21958582667688215,
+          "strength": 5.122625851693912
+        },
+        {
+          "behavior": 5.420061909634832,
+          "pot": 5.897040289028819,
+          "strength": 1.8012216904276057
+        }
+      ],
+      "start_weights": {
+        "behavior": 0.02,
+        "pot": 2.0,
+        "strength": 7.0
+      },
+      "updates": [
+        {
+          "attribute": "strength",
+          "base": 7.0,
+          "clipped_step": 0.9,
+          "gradient_estimate": 77.77777777777774,
+          "mean_minus": 186.0,
+          "mean_plus": 326.0,
+          "minus_weights": {
+            "behavior": 0.02,
+            "pot": 2.0,
+            "strength": 6.1
+          },
+          "new": 7.9,
+          "plus_weights": {
+            "behavior": 0.02,
+            "pot": 2.0,
+            "strength": 7.9
+          },
+          "raw_step": 1.555555555555555,
+          "span": 1.8000000000000007,
+          "status": "apply"
+        },
+        {
+          "attribute": "pot",
+          "base": 2.0,
+          "clipped_step": 0.0,
+          "gradient_estimate": 0.0,
+          "mean_minus": -44.0,
+          "mean_plus": -84.0,
+          "minus_weights": {
+            "behavior": 0.02,
+            "pot": 1.1,
+            "strength": 7.9
+          },
+          "new": 2.0,
+          "plus_weights": {
+            "behavior": 0.02,
+            "pot": 2.9,
+            "strength": 7.9
+          },
+          "raw_step": 0.0,
+          "span": 1.7999999999999998,
+          "status": "skip"
+        },
+        {
+          "attribute": "behavior",
+          "base": 0.02,
+          "clipped_step": -0.9,
+          "gradient_estimate": -282.22222222222223,
+          "mean_minus": 278.0,
+          "mean_plus": 24.0,
+          "minus_weights": {
+            "behavior": 0.02,
+            "pot": 2.0,
+            "strength": 7.9
+          },
+          "new": 0.02,
+          "plus_weights": {
+            "behavior": 0.92,
+            "pot": 2.0,
+            "strength": 7.9
+          },
+          "raw_step": -5.644444444444445,
+          "span": 0.9,
+          "status": "apply"
+        }
+      ]
+    }
+  ],
+  "settings": {
+    "chance_samples": 1,
+    "delta": 1.0,
+    "delta_decay_ratio": 0.9,
+    "games_per_opp": 1,
+    "history_len": 32,
+    "history_opponents": 4,
+    "initial_random_history": 4,
+    "iterations": 2,
+    "max_depth": 2,
+    "rounds": 10,
+    "sb": 10,
+    "seed": 42,
+    "stack": 2000,
+    "step_scale": 0.02
+  }
+}
