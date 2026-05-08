@@ -15,15 +15,16 @@ ACTION_LIKELIHOODS = { # We define 5 levels of hand strength and the likelihood 
 
 @dataclass
 class EvaluationWeights:
-    equity: float = 2.0
-    hand: float = 7.0
-    potential: float = 5.0
-    pot: float = 1.0
-    opponent: float = 0.8
-    pressure: float = 3.0
-    behavior: float = 0.5
-    cost: float = 0.10
-    risk: float = 0.35
+    equity: float = 2.74
+    hand: float = 8.0
+    potential: float = 5.32
+    pot: float = 0.30
+    opponent: float = 0.38
+    opponent_equity: float = 1.0
+    pressure: float = 3.91
+    behavior: float = 0.02
+    cost: float = 0.04
+    risk: float = 0.36
 
 
 @dataclass
@@ -37,29 +38,56 @@ class SearchConfig:
 class OpponentModel:
   def __init__(self):
     self.beliefs = [0.2] * 5
-    self.raise_count = 0
-    self.call_count = 0
-    self.fold_count = 0
-    self.total = 0
+    self.raise_count = 0.0
+    self.call_count = 0.0
+    self.fold_count = 0.0
+    self.total = 0.0
+    self.late_raise_pressure = 0.0
+    self.street_totals = {
+      "preflop": 0.0,
+      "flop": 0.0,
+      "turn": 0.0,
+      "river": 0.0,
+    }
 
-  def observe(self, action):
+  def observe(self, action, street=None):
     action = action.lower()
     if action not in ACTION_LIKELIHOODS:
       return
 
+    weight = self.street_weight(street)
     if action == "raise":
-      self.raise_count += 1
+      self.raise_count += weight
+      if street in ("turn", "river"):
+        self.late_raise_pressure += weight
     elif action == "call":
-      self.call_count += 1
+      self.call_count += weight
     elif action == "fold":
-      self.fold_count += 1
-    self.total += 1
+      self.fold_count += weight
+    self.total += weight
+
+    if street in self.street_totals:
+      self.street_totals[street] += weight
 
     likelihoods = ACTION_LIKELIHOODS[action]
-    new_beliefs = [belief * likelihood for belief, likelihood in zip(self.beliefs, likelihoods)]
+    new_beliefs = [
+      belief * (likelihood ** weight)
+      for belief, likelihood in zip(self.beliefs, likelihoods)
+    ]
     normalizer = sum(new_beliefs)
     if normalizer > 0:
       self.beliefs = [belief / normalizer for belief in new_beliefs]
+
+  def street_weight(self, street):
+    if street == "preflop":
+      return 0.60
+    if street == "flop":
+      return 0.90
+    if street == "turn":
+      return 1.20
+    if street == "river":
+      return 1.50
+    return 1.0
 
   def fold_probability(self):
     if self.total == 0:
@@ -82,7 +110,8 @@ class OpponentModel:
 
   def estimated_equity(self):
     expected_strength = sum(index * probability for index, probability in enumerate(self.beliefs))
-    return expected_strength / 4.0
+    late_pressure_bonus = min(0.25, 0.08 * self.late_raise_pressure)
+    return min(1.0, (expected_strength / 4.0) + late_pressure_bonus)
 
 
 class CustomPlayer(BasePokerPlayer):
@@ -210,7 +239,8 @@ class CustomPlayer(BasePokerPlayer):
           future_context["hole_cards"],
           future_context["community_cards"],
           future_context["round_state"],
-          future_context["opponent_model"].aggression_factor()
+          future_context["opponent_model"].aggression_factor(),
+          future_context["opponent_model"].estimated_equity()
         )
         total += self.expectiminimax(action, future_context, depth)
       best = max(best, total / len(future_equities))
@@ -248,7 +278,15 @@ class CustomPlayer(BasePokerPlayer):
       "raise_cost": raise_cost,
       "raises_left": self.raises_left(round_state),
       "opponent_model": opponent_model,
-      "buckets": self.get_buckets(equity, pot_amount, hole_cards, community_cards, round_state, behavior),
+      "buckets": self.get_buckets(
+        equity,
+        pot_amount,
+        hole_cards,
+        community_cards,
+        round_state,
+        behavior,
+        opponent_model.estimated_equity()
+      ),
     }
 
   def advance_context(self, context, pot_amount, call_cost):
@@ -298,6 +336,7 @@ class CustomPlayer(BasePokerPlayer):
       + weights.potential * buckets["potential"]
       + weights.pot * buckets["pot"]
       - weights.opponent * buckets["opponent"]
+      - weights.opponent_equity * buckets["opponent_equity"]
       - weights.pressure * buckets["pressure"]
       - weights.behavior * buckets["behavior"] * cost * 0.25
       - weights.cost * cost
@@ -308,15 +347,18 @@ class CustomPlayer(BasePokerPlayer):
       return -1000.0
     return -0.25 * player_cost
 
-  def get_buckets(self, equity, pot_amount, hole_cards, community_cards, round_state, behavior=None):
+  def get_buckets(self, equity, pot_amount, hole_cards, community_cards, round_state, behavior=None, opponent_equity=None):
     if behavior is None:
       behavior = self.get_opponent_strategy(round_state)
+    if opponent_equity is None:
+      opponent_equity = self.build_opponent_model(round_state).estimated_equity()
     return {
       "equity": self.get_equity_bucket(equity),
       "hand": self.get_hand_bucket(hole_cards, community_cards),
       "potential": self.get_potential_bucket(hole_cards, community_cards),
       "pot": self.get_pot_amount_bucket(pot_amount),
       "opponent": self.get_opponent_bucket(behavior),
+      "opponent_equity": opponent_equity,
       "pressure": self.get_pressure_bucket(round_state),
       "behavior": behavior
     }
@@ -384,10 +426,10 @@ class CustomPlayer(BasePokerPlayer):
       return self.opponent_model
 
     model = OpponentModel()
-    for histories in round_state["action_histories"].values():
+    for street, histories in round_state["action_histories"].items():
       for action in histories:
         if action.get("uuid") != self.uuid:
-          model.observe(action["action"])
+          model.observe(action["action"], street)
     return model
 
   def get_equity_bucket(self, equity):
