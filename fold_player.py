@@ -3,17 +3,17 @@ from pypokerengine.utils.card_utils import gen_cards, estimate_hole_card_win_rat
 from time import sleep
 import pprint
 
-class FoldPressurePlayer(BasePokerPlayer):
+class FoldPlayer(BasePokerPlayer):
 
   def declare_action(self, valid_actions, hole_card, round_state):
     equity = self.estimate_equity(hole_card, round_state)
     pressure = self.raise_count(round_state)
 
-    if pressure >= 1 and equity < 0.62:
+    if pressure >= 1 and equity < 0.6:
       action = valid_actions[0]["action"]
       return action # action returned here is sent to the poker engine
 
-    if equity >= 0.70:
+    if equity >= 0.75:
       for i in valid_actions:
         if i["action"] == "raise":
           action = i["action"]
@@ -25,7 +25,7 @@ class FoldPressurePlayer(BasePokerPlayer):
   def estimate_equity(self, hole_card, round_state):
     hole_cards = gen_cards(hole_card)
     community_cards = gen_cards(round_state["community_card"])
-    return estimate_hole_card_win_rate(80, 2, hole_cards, community_cards)
+    return estimate_hole_card_win_rate(100, 2, hole_cards, community_cards)
 
   def raise_count(self, round_state):
     histories = round_state["action_histories"].get(round_state["street"], [])
@@ -47,4 +47,4 @@ class FoldPressurePlayer(BasePokerPlayer):
     pass
 
 def setup_ai():
-  return FoldPressurePlayer()
+  return FoldPlayer()

@@ -8,12 +8,12 @@ class EquityPlayer(BasePokerPlayer):
   def declare_action(self, valid_actions, hole_card, round_state):
     equity = self.estimate_equity(hole_card, round_state)
 
-    if equity >= 0.72:
+    if equity >= 0.75:
       for i in valid_actions:
         if i["action"] == "raise":
           action = i["action"]
           return action  # action returned here is sent to the poker engine
-    if equity >= 0.52 or self.call_is_free(round_state):
+    if equity >= 0.5 or self.call_is_free(round_state):
       action = valid_actions[1]["action"]
       return action # action returned here is sent to the poker engine
 
@@ -23,7 +23,7 @@ class EquityPlayer(BasePokerPlayer):
   def estimate_equity(self, hole_card, round_state):
     hole_cards = gen_cards(hole_card)
     community_cards = gen_cards(round_state["community_card"])
-    return estimate_hole_card_win_rate(80, 2, hole_cards, community_cards)
+    return estimate_hole_card_win_rate(100, 2, hole_cards, community_cards)
 
   def call_is_free(self, round_state):
     histories = round_state["action_histories"].get(round_state["street"], [])

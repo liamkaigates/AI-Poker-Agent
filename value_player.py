@@ -8,7 +8,7 @@ class ValuePlayer(BasePokerPlayer):
   def declare_action(self, valid_actions, hole_card, round_state):
     equity = self.estimate_equity(hole_card, round_state)
 
-    if equity >= 0.68:
+    if equity >= 0.75:
       for i in valid_actions:
         if i["action"] == "raise":
           action = i["action"]
@@ -20,7 +20,7 @@ class ValuePlayer(BasePokerPlayer):
   def estimate_equity(self, hole_card, round_state):
     hole_cards = gen_cards(hole_card)
     community_cards = gen_cards(round_state["community_card"])
-    return estimate_hole_card_win_rate(80, 2, hole_cards, community_cards)
+    return estimate_hole_card_win_rate(100, 2, hole_cards, community_cards)
 
   def receive_game_start_message(self, game_info):
     pass
