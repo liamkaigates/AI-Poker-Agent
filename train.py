@@ -10,11 +10,10 @@ import json
 import random
 import time
 from collections import deque
-from dataclasses import fields, replace
 from pathlib import Path
 
 
-WEIGHT_ATTRS = tuple(field.name for field in fields(EvaluationWeights))
+WEIGHT_ATTRS = EvaluationWeights.ATTRIBUTES
 WEIGHT_BOUNDS = {"equity": (0.02, 8.0), "hand": (0.02, 8.0), "potential": (0.02, 8.0), "pot": (0.02, 8.0), "behavior": (0.10, 4.0), "cost": (0.03, 1.5), "opponent": (0.10, 8.0), "opponent_equity": (0.0, 4.0), "pressure": (0.02, 8.0), "risk": (0.05, 2.0)}
 BASELINE_OPPONENTS = {"call": CallPlayer, "equity": EquityPlayer, "fold": FoldPlayer, "raise": RaisedPlayer, "random": RandomPlayer, "value": ValuePlayer}
 MAX_INT = (2 ** 30) - 1
@@ -48,14 +47,14 @@ def scaled_step_cap(attr, delta_t):
 
 def player_with_weights(weights, seed, max_depth):
     player = CustomPlayer()
-    player.search_config.weights = replace(weights)
+    player.search_config.weights = weights.copy()
     player.search_config.random_seed = seed
     player.search_config.max_depth = max_depth
     return player
 
 
 def self_opponent(name, weights):
-    return {"type": "weights", "name": name, "weights": replace(weights)}
+    return {"type": "weights", "name": name, "weights": weights.copy()}
 
 
 def baseline_opponent(name):
@@ -121,18 +120,18 @@ def perturb(weights, attr, delta):
     max_val = min(high, base + delta)
     min_val = max(low, base - delta)
     span = max_val - min_val
-    return replace(weights, **{attr: max_val}), replace(weights, **{attr: min_val}), span
+    return weights.copy(**{attr: max_val}), weights.copy(**{attr: min_val}), span
 
 
-def get_opponents(current, history, rng, n_history_sample, opponent_names):
+def get_opponents(current, history, rng, num_samples, opponent_names):
     opponents = []
 
     if "self" in opponent_names:
         opponents.append(self_opponent("self_current", current))
-        history_lst = list(history)
-        if history_lst and n_history_sample > 0:
-            k = min(n_history_sample, len(history_lst))
-            for idx, weights in enumerate(rng.sample(history_lst, k)):
+        history_list = list(history)
+        if history_list and num_samples > 0:
+            k = min(num_samples, len(history_list))
+            for idx, weights in enumerate(rng.sample(history_list, k)):
                 opponents.append(self_opponent(f"self_history_{idx}", weights))
 
     for name in opponent_names:
@@ -142,7 +141,7 @@ def get_opponents(current, history, rng, n_history_sample, opponent_names):
     return opponents
 
 
-def train(iterations, delta, delta_decay_ratio, step_scale, history_maxlen, n_history_opponents, games_per_opp, max_round, initial_stack, small_blind, max_depth, seed, verbose, initial_random_history, opponent_names):
+def train(iterations, delta, delta_decay_ratio, step_scale, history_maxlen, n_history_opponents, games_per_opponent, max_round, initial_stack, small_blind, max_depth, seed, verbose, initial_random_history, opponent_names):
     rng = random.Random(seed)
     weights = EvaluationWeights()
     history = deque(maxlen=history_maxlen)
@@ -150,7 +149,7 @@ def train(iterations, delta, delta_decay_ratio, step_scale, history_maxlen, n_hi
         history.append(random_evaluation_weights(rng))
 
     trace = []
-    best_weights = replace(weights)
+    best_weights = weights.copy()
     best_score = float("-inf")
 
     if verbose:
@@ -162,7 +161,7 @@ def train(iterations, delta, delta_decay_ratio, step_scale, history_maxlen, n_hi
 
     for iteration in range(iterations):
         delta_t = delta * (delta_decay_ratio**iteration)
-        start_weights = replace(weights)
+        start_weights = weights.copy()
         opponents = get_opponents(start_weights, history, rng, n_history_opponents, opponent_names)
 
         if verbose:
@@ -172,8 +171,8 @@ def train(iterations, delta, delta_decay_ratio, step_scale, history_maxlen, n_hi
         for attr in WEIGHT_ATTRS:
             weights_plus, weights_minus, span = perturb(weights, attr, delta_t)
 
-            mean_plus = average_reward(weights_plus, opponents, games_per_opponent=games_per_opp, max_round=max_round, initial_stack=initial_stack, small_blind=small_blind, rng=rng, max_depth=max_depth)
-            mean_minus = average_reward(weights_minus, opponents, games_per_opponent=games_per_opp, max_round=max_round, initial_stack=initial_stack, small_blind=small_blind, rng=rng, max_depth=max_depth)
+            mean_plus = average_reward(weights_plus, opponents, games_per_opponent=games_per_opponent, max_round=max_round, initial_stack=initial_stack, small_blind=small_blind, rng=rng, max_depth=max_depth)
+            mean_minus = average_reward(weights_minus, opponents, games_per_opponent=games_per_opponent, max_round=max_round, initial_stack=initial_stack, small_blind=small_blind, rng=rng, max_depth=max_depth)
 
             skip_update = False
             diff = mean_plus - mean_minus
@@ -192,7 +191,7 @@ def train(iterations, delta, delta_decay_ratio, step_scale, history_maxlen, n_hi
                 step = max(-cap, min(cap, raw_step))
                 new_val = base + step
                 new_val = max(WEIGHT_BOUNDS[attr][0], min(WEIGHT_BOUNDS[attr][1], new_val))
-                weights = replace(weights, **{attr: new_val})
+                weights = weights.copy(**{attr: new_val})
 
             if verbose:
                 status = "SKIP" if skip_update else "APPLY"
@@ -205,10 +204,10 @@ def train(iterations, delta, delta_decay_ratio, step_scale, history_maxlen, n_hi
         if verbose:
             print(f"  end={format_weights(weights)}")
 
-        iteration_score = average_reward(weights, opponents, games_per_opp=games_per_opp, max_round=max_round, initial_stack=initial_stack, small_blind=small_blind, rng=rng, max_depth=max_depth)
+        iteration_score = average_reward(weights, opponents, games_per_opponent=games_per_opponent, max_round=max_round, initial_stack=initial_stack, small_blind=small_blind, rng=rng, max_depth=max_depth)
         if iteration_score > best_score:
             best_score = iteration_score
-            best_weights = replace(weights)
+            best_weights = weights.copy()
 
         trace.append({
             "iteration": iteration + 1,
@@ -246,7 +245,7 @@ def main():
     output = Path("log_experiment.json")
 
     start = time.time()
-    final_weights, results = train(iterations=iterations, delta=delta, delta_decay_ratio=delta_decay_ratio, step_scale=step_scale, history_maxlen=history_len, n_history_opponents=history_opponents, games_per_opp=games_per_opp, max_round=rounds, initial_stack=stack, small_blind=small_blind, max_depth=max_depth, seed=seed, verbose=not quiet, initial_random_history=initial_random_history, opponent_names=opponents)
+    final_weights, results = train(iterations=iterations, delta=delta, delta_decay_ratio=delta_decay_ratio, step_scale=step_scale, history_maxlen=history_len, n_history_opponents=history_opponents, games_per_opponent=games_per_opp, max_round=rounds, initial_stack=stack, small_blind=small_blind, max_depth=max_depth, seed=seed, verbose=not quiet, initial_random_history=initial_random_history, opponent_names=opponents)
     results["elapsed_seconds"] = round(time.time() - start, 3)
     results["settings"] = {"iterations": iterations, "delta": delta, "step_scale": step_scale, "delta_decay_ratio": delta_decay_ratio, "history_len": history_len, "history_opponents": history_opponents, "initial_random_history": initial_random_history, "games_per_opp": games_per_opp, "rounds": rounds, "stack": stack, "small_blind": small_blind, "max_depth": max_depth, "seed": seed, "opponents": opponents}
 

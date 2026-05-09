@@ -1,9 +1,6 @@
-from __future__ import annotations
-
 from pypokerengine.players import BasePokerPlayer
 from pypokerengine.engine.hand_evaluator import HandEvaluator
 from pypokerengine.utils.card_utils import gen_cards, estimate_hole_card_win_rate
-from dataclasses import dataclass, field
 
 MAX_DEPTH = 2 # Max depth for expectiminimax tree search
 ACTION_LIKELIHOODS = { # We define 5 levels of hand strength and the likelihood of each action given the respective hand strength
@@ -13,25 +10,35 @@ ACTION_LIKELIHOODS = { # We define 5 levels of hand strength and the likelihood 
 }
 
 
-@dataclass
+# Use class to keep track of weights used in agent and training 
 class EvaluationWeights:
-    equity: float = 2.48
-    hand: float = 7.82
-    potential: float = 5.10
-    pot: float = 0.84
-    opponent: float = 0.14
-    opponent_equity: float = 0.88
-    pressure: float = 4.15
-    behavior: float = 0.10
-    cost: float = 0.03
-    risk: float = 0.27
+  ATTRIBUTES = ("equity", "hand", "potential", "pot", "opponent", "opponent_equity", "pressure", "behavior", "cost", "risk") # Attributes used by each weight
+
+  # Set weights for the agent
+  def __init__(self, equity=2.48, hand=7.82, potential=5.10, pot=0.84, opponent=0.14, opponent_equity=0.88, pressure=4.15, behavior=0.10, cost=0.03, risk=0.27):
+    self.equity = equity
+    self.hand = hand
+    self.potential = potential
+    self.pot = pot
+    self.opponent = opponent
+    self.opponent_equity = opponent_equity
+    self.pressure = pressure
+    self.behavior = behavior
+    self.cost = cost
+    self.risk = risk
+
+  # 
+  def copy(self, **updates):
+    values = {attr: getattr(self, attr) for attr in self.ATTRIBUTES}
+    values.update(updates)
+    return EvaluationWeights(**values)
 
 
-@dataclass
 class SearchConfig:
-  max_depth: int = MAX_DEPTH
-  random_seed: int | None = None
-  weights: EvaluationWeights = field(default_factory=EvaluationWeights)
+  def __init__(self, max_depth=MAX_DEPTH, random_seed=None, weights=None):
+    self.max_depth = max_depth
+    self.random_seed = random_seed
+    self.weights = weights or EvaluationWeights()
 
 
 class OpponentModel:
