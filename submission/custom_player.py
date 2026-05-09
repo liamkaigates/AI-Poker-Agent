@@ -42,13 +42,14 @@ class SearchConfig:
 
 
 class OpponentModel:
+  # A class that stores observed information about the opponent to predict their hand strength and actions
   def __init__(self):
-    self.beliefs = [0.2] * 5
+    self.beliefs = [0.2] * 5 # Initialized to assume the opponent is equally likely to have any hand strength at the beginning of the game
     self.raise_count = 0.0
     self.call_count = 0.0
     self.fold_count = 0.0
     self.total = 0.0
-    self.late_raise_pressure = 0.0
+    self.late_raise_pressure = 0.0 # This value increases in later streets, to indicate that a raise has higher signifcance when the pot and information is more developed.
     self.street_totals = {
       "preflop": 0.0,
       "flop": 0.0,
@@ -57,10 +58,12 @@ class OpponentModel:
     }
 
   def observe(self, action, street=None):
+    # Observe an action from the opponent and update beliefs and action counts accordingly. Actions in later streets are weighted more heavily.
     action = action.lower()
     if action not in ACTION_LIKELIHOODS:
       return
 
+    # Get weight for given street and update action count
     weight = self.street_weight(street)
     if action == "raise":
       self.raise_count += weight
@@ -75,6 +78,7 @@ class OpponentModel:
     if street in self.street_totals:
       self.street_totals[street] += weight
 
+    # Update beliefs about opponent's hand strength based on the observed action, normalizing it to a probability distribution.
     likelihoods = ACTION_LIKELIHOODS[action]
     new_beliefs = [
       belief * (likelihood ** weight)
@@ -85,6 +89,7 @@ class OpponentModel:
       self.beliefs = [belief / normalizer for belief in new_beliefs]
 
   def street_weight(self, street):
+     # Weight defining how informative actions are in different game phases.
     if street == "preflop":
       return 0.60
     if street == "flop":
@@ -96,6 +101,7 @@ class OpponentModel:
     return 1.0
 
   def fold_probability(self):
+    # Current estimate of the probaility the opponent will fold (initially 30%)
     if self.total == 0:
       return 0.30
     passive_rate = (self.fold_count + (0.4 * self.call_count)) / self.total
@@ -103,6 +109,7 @@ class OpponentModel:
     return (weight * passive_rate) + ((1.0 - weight) * 0.30)
 
   def call_probability(self):
+    # Current estimate of the probaility the opponent will call (initially 40%)
     if self.total == 0:
       return 0.40
     rate = self.call_count / self.total
@@ -110,11 +117,13 @@ class OpponentModel:
     return (weight * rate) + ((1.0 - weight) * 0.40)
 
   def aggression_factor(self):
+    # A measure of how aggresive the opponent's actions are
     if self.total == 0:
       return 0.5
     return (self.raise_count + (0.25 * self.call_count)) / self.total
 
   def estimated_equity(self):
+    # A rough estimate of the opponent's expected strength based on the current observations and game state
     expected_strength = sum(index * probability for index, probability in enumerate(self.beliefs))
     late_pressure_bonus = min(0.25, 0.08 * self.late_raise_pressure)
     return min(1.0, (expected_strength / 4.0) + late_pressure_bonus)
